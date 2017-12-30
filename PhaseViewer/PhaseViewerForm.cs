@@ -13,6 +13,7 @@ namespace PhaseViewer
 		private readonly Model _model = new Model();
 		private readonly Dictionary<int, Color> _phaseColors;
 		private readonly List<Part> _mainParts;
+		private readonly List<Part> _secondaryParts;
 
 		public PhaseViewerForm()
 		{
@@ -35,7 +36,9 @@ namespace PhaseViewer
 				{10000, new Color(0, .5, 0)},
 			};
 
-			_mainParts = GetMainParts();
+			var parts = GetParts();
+			_mainParts = GetMainParts(parts);
+			_secondaryParts = GetSecondaryParts(parts);
 		}
 
 		private void PhaseViewerForm_Load(object sender, EventArgs e)
@@ -43,12 +46,12 @@ namespace PhaseViewer
 			var phases = _model.GetPhases()
 				.OfType<Phase>()
 				.ToList()
-				.Select(p => new
+				.Select(p => new PhaseView
 				{
 					Number = p.PhaseNumber,
 					Name = p.PhaseName,
 					Comment = p.PhaseComment,
-					Current = p.IsCurrentPhase == 1 ? "CURRENT" : string.Empty
+					Current = p.IsCurrentPhase == 1
 				}).ToList();
 
 			phases.Sort((a,b) => a.Number.CompareTo(b.Number));
@@ -56,7 +59,116 @@ namespace PhaseViewer
 			dataGridViewPhases.DataSource = phases;
 		}
 
-		private List<Part> GetMainParts()
+		private void buttonShowAllPhases_Click(object sender, EventArgs e)
+		{
+			var phaseGroups = _mainParts.GroupBy(p =>
+			{
+				p.GetPhase(out Phase phase);
+				return phase.PhaseNumber;
+			}).ToList();
+
+			phaseGroups.ForEach(p =>
+			{
+				ModelObjectVisualization.SetTemporaryState(p.OfType<ModelObject>().ToList(), _phaseColors[p.Key]);
+			});
+		}
+
+		private void buttonShowPhase_Click(object sender, EventArgs e)
+		{
+			var phaseNumber = GetPhaseNumber();
+			var modelObjects = GetModelObjects(phaseNumber);
+			ModelObjectVisualization.SetTemporaryState(modelObjects, _phaseColors[phaseNumber]);
+		}
+
+		private void buttonHidePhase_Click(object sender, EventArgs e)
+		{
+			var phaseNumber = GetPhaseNumber();
+			var modelObjects = GetModelObjects(phaseNumber);
+			ModelObjectVisualization.SetTransparency(modelObjects, TemporaryTransparency.HIDDEN);
+		}
+
+		private void buttonResetViews_Click(object sender, EventArgs e)
+		{
+			ModelObjectVisualization.ClearAllTemporaryStates();
+		}
+
+		private int GetPhaseNumber()
+		{
+			var phaseView = dataGridViewPhases?.CurrentRow?.DataBoundItem as PhaseView;
+			return phaseView?.Number ?? 0;
+		}
+
+		private List<ModelObject> GetModelObjects(int phaseNumber)
+		{
+			var mainParts = GetMainPartsByPhase(phaseNumber);
+			var secondaryParts = GetSecondaryPartsByPhase(phaseNumber);
+
+			var modelObjects = new List<ModelObject>();
+			if (checkBoxMainParts.Checked)
+				modelObjects.AddRange(mainParts);
+			if (checkBoxSecondaryParts.Checked)
+				modelObjects.AddRange(secondaryParts);
+
+			ModelObjectEnumerator.AutoFetch = true;
+
+			return modelObjects;
+		}
+
+		private List<Part> GetMainPartsByPhase(int phaseNumber)
+		{
+			return
+				_mainParts
+					.Where(p =>
+					{
+						p.GetPhase(out Phase phase);
+						return phase.PhaseNumber == phaseNumber;
+					})
+					.ToList();
+		}
+
+		private List<Part> GetSecondaryPartsByPhase(int phaseNumber)
+		{
+			return
+				_secondaryParts
+					.Where(p =>
+					{
+						p.GetPhase(out Phase phase);
+						return phase.PhaseNumber == phaseNumber;
+					})
+					.ToList();
+		}
+
+		private List<Part> GetMainParts(List<Part> parts = null)
+		{
+			if (parts == null || !parts.Any())
+				parts = GetParts();
+
+			var mainParts = parts.AsParallel().Where(p =>
+			{
+				int isMainPart = 0;
+				p.GetReportProperty("MAIN_PART", ref isMainPart);
+				return isMainPart > 0;
+			}).ToList();
+
+			return mainParts;
+		}
+
+		private List<Part> GetSecondaryParts(List<Part> parts = null)
+		{
+			if (parts == null || !parts.Any())
+				parts = GetParts();
+
+			var mainParts = parts.AsParallel().Where(p =>
+			{
+				int isMainPart = 0;
+				p.GetReportProperty("MAIN_PART", ref isMainPart);
+				return isMainPart < 1;
+			}).ToList();
+
+			return mainParts;
+		}
+
+		private List<Part> GetParts()
 		{
 			ModelObjectEnumerator.AutoFetch = true;
 
@@ -83,46 +195,16 @@ namespace PhaseViewer
 			parts.AddRange(contourPlates);
 			parts.AddRange(polybeams);
 
-			var mainParts = parts.AsParallel().Where(p =>
-			{
-				int isMainPart = 0;
-				p.GetReportProperty("MAIN_PART", ref isMainPart);
-				return isMainPart > 0;
-			}).ToList();
-
-			return mainParts;
+			return parts;
 		}
+	}
 
-		private void buttonShowAllPhases_Click(object sender, EventArgs e)
-		{
-			var phaseGroups = _mainParts.AsParallel().GroupBy(p =>
-			{
-				p.GetPhase(out Phase phase);
-				return phase.PhaseNumber;
-			}).ToList();
-
-			phaseGroups.ForEach(p =>
-			{
-				ModelObjectVisualization.SetTemporaryState(p.OfType<ModelObject>().ToList(), _phaseColors[p.Key]);
-			});
-		}
-
-		private void buttonShowPhase_Click(object sender, EventArgs e)
-		{
-			dynamic row = dataGridViewPhases?.CurrentRow?.DataBoundItem;
-			var phaseNumber = (int)row.Number;
-
-			var modelObjects = _mainParts.AsParallel()
-				.Where(p =>
-				{
-					p.GetPhase(out Phase phase);
-					return phase.PhaseNumber == phaseNumber;
-				})
-				.OfType<ModelObject>()
-				.ToList();
-
-			ModelObjectVisualization.SetTemporaryState(modelObjects, _phaseColors[phaseNumber]);
-		}
+	public class PhaseView
+	{
+		public int Number { get; set; }
+		public string Name { get; set; }
+		public string Comment { get; set; }
+		public bool Current { get; set; }
 	}
 
 	public static class ExtensionMethods
